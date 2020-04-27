@@ -1,0 +1,13 @@
+name: toy-lang
+version: 0.1.0
+
+authors:
+  - Paul M. Lambert <plambert@plambert.net>
+
+targets:
+  toy-lang:
+    main: src/toy-lang.cr
+
+crystal: 0.34.0
+
+license: MIT
