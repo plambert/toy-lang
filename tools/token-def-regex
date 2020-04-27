@@ -1,0 +1,78 @@
+#!/usr/bin/env perl
+
+# perl -nE 'BEGIN{printf "case self\n";} chomp; if (m{^\s*(\w+)\s*\#\s*/((?:[^\\/]+?|\\.)*)/}){printf "when %s\n  %%r{%s}\n", $1, $2}END{printf "else\n  raise \"no regexp for #{self.inspect}\"\nend\n";}' toy-lang-token.cr
+
+use 5.016;
+use strict;
+use warnings;
+use FindBin;
+use Path::Tiny;
+
+my $basedir=path($FindBin::Bin, "..")->realpath;
+my $srcfile=path($basedir, "src", "toy-lang-token.cr");
+
+die "${srcfile}: file not found\n" unless -f $srcfile;
+
+my $definition_for={
+  regex => <<DEF_REGEX,
+def regex
+  # generated with tools/token-def-regex
+  case self
+%%WHEN%%
+  else
+    raise "no regex for #{self.inspect}"
+  end
+end
+DEF_REGEX
+  match => <<DEF_MATCH,
+def match(text : String, offset : Int32)
+  case text
+%%WHEN%%
+  else
+    raise "no token match for #{text[offset, 99].inspect}"
+  end
+end
+DEF_MATCH
+};
+
+$definition_for->{$_} =~ s{(\A|(?<=\n))}{  }g for keys %$definition_for;
+
+# my $match = $definition;
+# $match =~ s{\A((?:.+\n)*)%%WHEN%%\n((?:.+\n)*.*)\z}{sprintf "%s%s%s", quotemeta($1), "(.+|\n+)*?", quotemeta($2)}e;
+my $match_for;
+$match_for->{$_}=sprintf "(?<=\\n)(\\h*)def %s\\n(?:\\1.*\\n)*?\\1end\\n", $_ for keys %$definition_for;
+
+my $text=$srcfile->slurp_utf8;
+my $original_text=$text;
+
+my @whens;
+while($text =~ m{(?<=\n)\h*(\w+)\s*\#\s*/((?:[^\\/]+|\\.)*?)/\s*?(?:\#.*)?\n}g) {
+  my ($name, $regex) = ($1, $2);
+  printf STDERR "%20s -> /%s/\n", $1, $2;
+  push @whens, sprintf "  when %s then %%r{%s}\n", $name, $regex;
+}
+my $new=join '', @whens;
+for my $method (keys %$definition_for) {
+  my $definition=$definition_for->{$method};
+  my $match=$match_for->{$method};
+  if ($text =~ $match) {
+    my $indent=$1;
+    printf STDERR "INDENT: '%s' (%d spaces)\n", $indent, length $indent;
+    $definition =~ s{%%WHEN%%\n}{$new};
+    $definition =~ s{\n}{"\n${indent}"}eg;
+    $definition = $indent . $definition;
+    $text =~ s{${match}}{$definition};
+  }
+  else {
+    die "$0: ${srcfile}: ${method}: could not find method definition\n";
+  }
+}
+if ($text eq $original_text) {
+  warn "${srcfile}: no changes\n";
+}
+else {
+  system "cp", "-p", "-v", $srcfile, "${srcfile}.bak";
+  $srcfile->spew_utf8($text);
+  system "crystal", "tool", "format", "--no-color", $srcfile;
+  system "diff", "-u", "${srcfile}.bak", $srcfile;
+}
