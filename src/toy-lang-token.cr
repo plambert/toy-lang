@@ -14,8 +14,8 @@ module Toy::Lang
       BraceClose           # /\}/
       LessThan             # /</
       GreaterThan          # />/
-      DoubleQuote          # /"/
-      SingleQuote          # /'/
+      DoubleQuote          # /"/ # begins StringDoubleQuote
+      SingleQuote          # /'/ # begins StringSingleQuote
       BackQuote            # /`/
       Comment              # /\#.*\n/
       ParenOpen            # /\(/
