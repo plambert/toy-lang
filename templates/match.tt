@@ -1,0 +1,11 @@
+def match(text : String, offset : Int32)
+  case text
+[% FOREACH token IN tokens %]
+  when .match regex: [% token.regex %], pos: offset
+    [% token.name %]
+[% END %]
+  else
+    raise "no token match for #{text[offset, 99].inspect}"
+  end
+end
+

@@ -1,0 +1,10 @@
+def regex
+  # generated with tools/token-def-regex
+  case self
+[% FOREACH token IN tokens %]
+  when [% token.name %] then [% token.regex %]
+[% END %]
+  else
+    raise "no regex for #{self.inspect}"
+  end
+end
