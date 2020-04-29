@@ -8,3 +8,4 @@ def regex
     raise "no regex for #{self.inspect}"
   end
 end
+3

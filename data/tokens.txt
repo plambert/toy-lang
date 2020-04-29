@@ -1,0 +1,64 @@
+WHITESPACE {
+  HorizontalWhiteSpace /[ \t]+/
+  NewLine              /\n/
+  WhiteSpace           /\s+/
+}
+
+SYMBOL {
+  Equals           /=/
+  LessThan         /</
+  GreaterThan      />/
+  Asterix          /\*/
+  Comma            /,/
+  Percent          /%/
+  DollarSign       /\$/
+  AtSign           /\@/
+  ExclamationPoint /!/
+  Tilde            /~/
+  Caret            /^/
+  Ampersand        /&/
+  Hyphen           /-/
+  Underscore       /_/
+  PlusSign         /\+/
+  Period           /\./
+  Colon            /:/
+  Semicolon        /;/
+  Backslash        /\\/
+  Pipe             /\|/
+}
+
+DELIMITER {
+
+  STRING_DELIMITER {
+
+    DoubleQuote /"/ begins:StringDoubleQuote
+    SingleQuote /'/ begins:StringSingleQuote
+    BackQuote   /`/
+  }
+
+  BALANCED_DELIMITER {
+    Paren    [ /\(/ /\)/ ]
+    Bracket  [ /\[/ /\]/ ]
+    Brace    [ /\{/ /\}/ ]
+  }
+}
+
+COMPLEX_TOKEN {
+  IDENTIFIER {
+    IdentifierLocal  /[a-z][a-zA-Z0-9_]*/
+    IdentifierGlobal /[A-Z][a-zA-Z0-9_]*/
+  }
+
+  NUMERIC {
+    Float   /[-+]?(?:\d[_\d]*)?\.[_\d]*e[-+]?\d+/      rank:0
+    Real    /[-+]?\.\d+[_\d]*|[_\d]*\d+\.[_\d]*/
+    Integer /[-+]?[_\d]*\d[_\d]*/                      rank:2
+  }
+
+  Comment            /\#.*\n/
+  InterpolationOpen  /\#\{/
+  InterpolationClose /\}/
+  FunctionOpen       /\{\s*\(/
+  FunctionClose      /\}/
+  MethodCall         /\./
+}

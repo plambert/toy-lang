@@ -7,72 +7,198 @@ use strict;
 use warnings;
 use FindBin;
 use Path::Tiny;
+use Template::Tiny;
+use JSON::MaybeXS;
+use List::Util qw/uniq/;
 
+my $JSON=JSON->new->canonical->utf8->pretty->allow_blessed->convert_blessed->allow_nonref;
 my $basedir=path($FindBin::Bin, "..")->realpath;
-my $srcfile=path($basedir, "src", "toy-lang-token.cr");
+my $templatedir=path $basedir => "templates";
+my $srcdir=path $basedir => "src";
+my $tokenfile=path $basedir => "data" => "tokens.txt";
+my $data={};
+my %RE;
+$RE{regex} = qr{ (?: [^/\\]+ | \\. )* }x;
+$RE{opt} = qr{ (?: [A-Za-z] [A-Za-z_0-9]* (?: : \S+ )? ) }x;
+$RE{optlist} = qr{ (?: \s+ $RE{opt} (?! \s* /) )+ }x;
+$RE{token} = qr{ \A
+  \s* (?<name> [A-Z] [A-Za-z0-9]* )
+  \s*
+  (?:
+    /
+      (?<regex> $RE{regex} )
+    /
+  |
+    \[ \s*
+      / (?<left_delimiter> $RE{regex} ) /
+      \s+
+      / (?<right_delimiter> $RE{regex} )/
+      \s*
+    \]
+  )
+  (?<opts> $RE{optlist} )?
+  \s*? \n
+}x;
+$RE{open_section} = qr{ \A \s* (?<section> [A-Z] [A-Z_]* ) \s* \{ }x;
+$RE{close_section} = qr{ \A \s* \} }x;
+$RE{comment} = qr{ \A (?: \s* \# .* \n )+ }x;
 
-die "${srcfile}: file not found\n" unless -f $srcfile;
-
-my $definition_for={
-  regex => <<DEF_REGEX,
-def regex
-  # generated with tools/token-def-regex
-  case self
-%%WHEN%%
-  else
-    raise "no regex for #{self.inspect}"
-  end
-end
-DEF_REGEX
-  match => <<DEF_MATCH,
-def match(text : String, offset : Int32)
-  case text
-%%WHEN%%
-  else
-    raise "no token match for #{text[offset, 99].inspect}"
-  end
-end
-DEF_MATCH
-};
-
-$definition_for->{$_} =~ s{(\A|(?<=\n))}{  }g for keys %$definition_for;
-
-# my $match = $definition;
-# $match =~ s{\A((?:.+\n)*)%%WHEN%%\n((?:.+\n)*.*)\z}{sprintf "%s%s%s", quotemeta($1), "(.+|\n+)*?", quotemeta($2)}e;
-my $match_for;
-$match_for->{$_}=sprintf "(?<=\\n)(\\h*)def %s\\n(?:\\1.*\\n)*?\\1end\\n", $_ for keys %$definition_for;
-
-my $text=$srcfile->slurp_utf8;
-my $original_text=$text;
-
-my @whens;
-while($text =~ m{(?<=\n)\h*(\w+)\s*\#\s*/((?:[^\\/]+|\\.)*?)/\s*?(?:\#.*)?\n}g) {
-  my ($name, $regex) = ($1, $2);
-  printf STDERR "%20s -> /%s/\n", $1, $2;
-  push @whens, sprintf "  when %s then %%r{%s}\n", $name, $regex;
+for my $dir ($basedir, $templatedir, $srcdir) {
+  die "${dir}: directory not found\n" unless -d $dir;
 }
-my $new=join '', @whens;
-for my $method (keys %$definition_for) {
-  my $definition=$definition_for->{$method};
-  my $match=$match_for->{$method};
-  if ($text =~ $match) {
-    my $indent=$1;
-    printf STDERR "INDENT: '%s' (%d spaces)\n", $indent, length $indent;
-    $definition =~ s{%%WHEN%%\n}{$new};
-    $definition =~ s{\n}{"\n${indent}"}eg;
-    $definition = $indent . $definition;
-    $text =~ s{${match}}{$definition};
+
+for my $file ($tokenfile) {
+  die "${file}: file not found\n" unless -f $file;
+}
+
+$data->{tokens} = parse_token_data($tokenfile);
+
+say  $JSON->encode($data); exit;
+
+sub set_flag {
+  my $flags=shift;
+  for my $flag (@_) {
+    my $key;
+    my $value;
+    my $is_negative;
+    $flag =~ s{^([-+])}{};
+    $is_negative = '-' eq $1 ? 1 : 0;
+    if ($flag =~ m{^([^:]+):(.*)$}) {
+      ($key, $value) = ($1, $2);
+    }
+    else {
+      ($key, $value) = ($flag, 1);
+    }
+
+    if ($is_negative) {
+      $flags->{$key}=[undef];
+    }
+    elsif (not exists $flags->{$key} or not ref $flags->{$key}) {
+      $flags->{$key}=$value;
+    }
+
   }
-  else {
-    die "$0: ${srcfile}: ${method}: could not find method definition\n";
+  return $flags;
+}
+
+sub parse_token_data {
+  my $file=shift;
+  my @tokens;
+  my @stack;
+  my $token_data=$file->slurp_utf8;
+  my $original_length=length $token_data;
+  while(length $token_data > 0 and $token_data =~ /\S/) {
+    $token_data =~ s{\A\s+}{};
+    $token_data =~ s{$RE{comment}}{};
+    my $offset = $original_length-length $token_data;
+    if ($token_data =~ s{$RE{open_section}}{}) {
+      push @stack, $+{section};
+    }
+    elsif ($token_data =~ s{$RE{close_section}}{}) {
+      if (@stack) {
+        pop @stack;
+      }
+      else {
+        die sprintf "%s: %d bytes: unexpected }\n", $file, $offset;
+      }
+    }
+    elsif ($token_data =~ s{$RE{token}}{}) {
+      my %token=%+;
+      $token{flags}={};
+      #=defined $token{opts} ? map { m{\A(.+?):(.*)\z} ? ($1, $2) : ( $_, 1 )} split /\s+/, $token{opts} : ();
+      $token{opts} //= '';
+      $token{flags}=set_flag $token{flags}, @stack, split /\s+/, delete $token{opts};
+      if (defined $token{left_delimiter} and length $token{left_delimiter}) {
+        my ($left, $right) = map { delete $token{$_} } qw{left_delimiter right_delimiter};
+        my $name=delete $token{name};
+        push @tokens,
+          { %token, name => "${name}Open", regex => $left},
+          { %token, name => "${name}Close", regex => $right };
+      }
+      else {
+        push @tokens, { %token };
+      }
+    }
+    else {
+      die sprintf "%s: %d bytes: cannot parse: '%s'\n", $file, $offset, substr($token_data, 0, 99);
+    }
+  }
+  return \@tokens;
+}
+
+sub parse_token_src {
+  my $file=shift;
+  my $src=$file->slurp_utf8;
+  my @tokens;
+  while($src =~ m{(?<=\n)\h*(\w+)\s*\#\s*/((?:[^\\/]+|\\.)*?)/\s*?(?:\#.*)?\n}g) {
+    push @tokens, { name => $1, regex => $2 };
+  }
+  return \@tokens;
+}
+
+sub process_srcfile {
+  my $path=shift;
+  my $src=shift;
+  my @methods=@_;
+  for my $method (@methods) {
+    my $ttfile=path $templatedir => "${method}.tt";
+    die "$0: ${ttfile}: method template not found, referenced in '${path}'" unless -f $ttfile;
+    my $tt=$ttfile->slurp_utf8;
+    my $definition=Template::Tiny->new(\$tt, )
   }
 }
-if ($text eq $original_text) {
-  warn "${srcfile}: no changes\n";
+
+sub walk_src_tree {
+  $srcdir->visit(sub{
+    my ($path, $state) = @_;
+    return unless $path =~ m{\.cr$};
+    my $content=$path->slurp_utf8;
+    return unless $content =~ m{\n[ \t]*\#[ ]+TEMPLATED_METHODS:[ ]+(.*?)\s*$};
+    my $methods=$1;
+    $state->{$path} = process_srcfile $path, $content, split /\s*,\s*/, $methods;
+  }, {recurse => 1});
 }
-else {
-  system "cp", "-p", "-v", $srcfile, "${srcfile}.bak";
-  $srcfile->spew_utf8($text);
-  system "crystal", "tool", "format", "--no-color", $srcfile;
-  system "diff", "-u", "${srcfile}.bak", $srcfile;
-}
+
+
+
+# $definition_for->{$_} =~ s{(\A|(?<=\n))}{  }g for keys %$definition_for;
+
+# # my $match = $definition;
+# # $match =~ s{\A((?:.+\n)*)%%WHEN%%\n((?:.+\n)*.*)\z}{sprintf "%s%s%s", quotemeta($1), "(.+|\n+)*?", quotemeta($2)}e;
+# my $match_for;
+# $match_for->{$_}=sprintf "(?<=\\n)(\\h*)def %s\\n(?:\\1.*\\n)*?\\1end\\n", $_ for keys %$definition_for;
+
+# my $text=$srcfile->slurp_utf8;
+# my $original_text=$text;
+
+# my @whens;
+# while($text =~ m{(?<=\n)\h*(\w+)\s*\#\s*/((?:[^\\/]+|\\.)*?)/\s*?(?:\#.*)?\n}g) {
+#   my ($name, $regex) = ($1, $2);
+#   printf STDERR "%20s -> /%s/\n", $1, $2;
+#   push @whens, sprintf "  when %s then %%r{%s}\n", $name, $regex;
+# }
+# my $new=join '', @whens;
+# for my $method (keys %$definition_for) {
+#   my $definition=$definition_for->{$method};
+#   my $match=$match_for->{$method};
+#   if ($text =~ $match) {
+#     my $indent=$1;
+#     printf STDERR "INDENT: '%s' (%d spaces)\n", $indent, length $indent;
+#     $definition =~ s{%%WHEN%%\n}{$new};
+#     $definition =~ s{\n}{"\n${indent}"}eg;
+#     $definition = $indent . $definition;
+#     $text =~ s{${match}}{$definition};
+#   }
+#   else {
+#     die "$0: ${srcfile}: ${method}: could not find method definition\n";
+#   }
+# }
+# if ($text eq $original_text) {
+#   warn "${srcfile}: no changes\n";
+# }
+# else {
+#   system "cp", "-p", "-v", $srcfile, "${srcfile}.bak";
+#   $srcfile->spew_utf8($text);
+#   system "crystal", "tool", "format", "--no-color", $srcfile;
+#   system "diff", "-u", "${srcfile}.bak", $srcfile;
+# }
